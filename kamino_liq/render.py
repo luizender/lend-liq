@@ -2,14 +2,38 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
+
 from rich import box
 from rich.console import Console
+from rich.progress import BarColumn, MofNCompleteColumn, Progress, SpinnerColumn, TextColumn
 from rich.table import Table
 
 from .liquidation import CrashStatus, crash_scenario, single_asset_levels
 from .models import Market, Position, Reserve, RpcNode
 
 console = Console()
+
+
+@contextmanager
+def scan_progress(total: int) -> Iterator[Callable[[], None]]:
+    """Transient progress bar over `total` markets; yields a per-market tick.
+
+    The yielded callback is thread-safe, so the parallel market scan can advance
+    it from worker threads. On a non-terminal (piped) console it renders nothing.
+    """
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[dim]Scanning markets…[/dim]"),
+        BarColumn(),
+        MofNCompleteColumn(),
+        console=console,
+        transient=True,
+    ) as progress:
+        task = progress.add_task("scan", total=total)
+        yield lambda: progress.advance(task)
+
 
 _HEALTHY = 1.5
 _CAUTION = 1.15

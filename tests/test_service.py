@@ -53,6 +53,31 @@ def test_market_without_active_obligations_is_skipped(monkeypatch, fake_kamino, 
     assert list(service.load_positions(client, None, "W", [MARKET])) == []
 
 
+def test_load_positions_scans_every_market_and_ticks_progress(monkeypatch, fake_kamino, obligation):
+    _patch_enrich(monkeypatch)
+    other = Market("Altcoins Market", "MKT2", is_primary=False, description="")
+    ob = obligation(
+        has_debt=True,
+        debt_value="5.0",
+        deposits=[{"depositReserve": "resSOL", "depositedAmount": str(10 * 10**9)}],
+        borrows=[{"borrowReserve": "resUSDC", "borrowedAmountSf": str(5 * 10**6 * FRACTION_SCALE)}],
+    )
+    # Only the first market holds a position; the second must still be scanned.
+    client = fake_kamino(
+        markets=[MARKET, other], reserves=RESERVES, obligations_map={"MKT": [ob]}, prices=PRICES
+    )
+    ticks = {"n": 0}
+
+    def tick() -> None:
+        ticks["n"] += 1
+
+    results = list(service.load_positions(client, None, "W", [MARKET, other], on_scan=tick))
+    assert ticks["n"] == 2  # both markets scanned, one tick each
+    ((market, position),) = results
+    assert market is MARKET
+    assert position.collateral[0].symbol == "SOL"
+
+
 def test_is_active_variants(obligation):
     with_debt = obligation(has_debt=True, deposits=[], borrows=[])
     only_deposit = obligation(

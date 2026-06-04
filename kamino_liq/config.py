@@ -12,6 +12,11 @@ HTTP_TIMEOUT = 30
 RPC_TIMEOUT = 40
 RPC_MAX_ACCOUNTS = 100  # getMultipleAccounts caps at 100 keys per request
 
+# A wallet's obligations are scanned one REST call per market and there is no
+# cross-market endpoint, so the lookups are fanned out concurrently. Capped at
+# the default requests connection-pool size to avoid churning connections.
+MARKET_SCAN_WORKERS = 8
+
 # KLend "scaled fraction" (Sf) fixed-point factor.
 FRACTION_SCALE = 2**60
 

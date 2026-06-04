@@ -20,6 +20,7 @@ from .render import (
     render_reserves,
     render_rpcs,
     render_simulation,
+    scan_progress,
 )
 from .service import load_positions
 
@@ -105,8 +106,10 @@ def simulate_command(
     solana = SolanaRPC(rpc)
     markets = _select_markets(client, market)
 
+    with scan_progress(len(markets)) as tick:
+        found = list(load_positions(client, solana, wallet, markets, on_scan=tick))
     held: set[str] = set()
-    for _market, position in load_positions(client, solana, wallet, markets):
+    for _market, position in found:
         render_simulation(position, apply_price_overrides(position, overrides), show_crash=crash)
         held.update(c.symbol.upper() for c in position.collateral)
         held.update(b.symbol.upper() for b in position.borrows)
@@ -193,8 +196,10 @@ def _report_once(
     wallet: str, client: KaminoClient, solana: SolanaRPC, markets: list[Market], crash: bool
 ) -> list[Market]:
     """Render every position; return the markets that actually held one."""
+    with scan_progress(len(markets)) as tick:
+        found = list(load_positions(client, solana, wallet, markets, on_scan=tick))
     active: list[Market] = []
-    for market, position in load_positions(client, solana, wallet, markets):
+    for market, position in found:
         if market not in active:
             active.append(market)
         render_position(position, show_crash=crash)

@@ -3,7 +3,8 @@ typed Position objects for a wallet."""
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
+from concurrent.futures import ThreadPoolExecutor
 
 from . import config
 from .api import KaminoClient
@@ -16,16 +17,38 @@ def load_positions(
     rpc: SolanaRPC,
     wallet: str,
     markets: list[Market],
+    on_scan: Callable[[], None] | None = None,
 ) -> Iterator[tuple[Market, Position]]:
-    """Yield (market, position) for every active obligation across `markets`."""
+    """Yield (market, position) for every active obligation across `markets`.
+
+    Obligation lookups are fanned out across `markets` concurrently (there is no
+    cross-market endpoint); `on_scan`, if given, is called once per market as its
+    lookup finishes, for progress reporting.
+    """
     prices = client.prices()
-    for market in markets:
-        obligations = [o for o in client.obligations(market.address, wallet) if _is_active(o)]
-        if not obligations:
-            continue
+    for market, obligations in _scan_obligations(client, wallet, markets, on_scan):
         reserves = client.reserves(market.address)
         for obligation in obligations:
             yield market, _build_position(obligation, market, reserves, prices, rpc)
+
+
+def _scan_obligations(
+    client: KaminoClient,
+    wallet: str,
+    markets: list[Market],
+    on_scan: Callable[[], None] | None,
+) -> list[tuple[Market, list[dict]]]:
+    """Look up each market's active obligations in parallel, preserving order."""
+
+    def fetch(market: Market) -> tuple[Market, list[dict]]:
+        active = [o for o in client.obligations(market.address, wallet) if _is_active(o)]
+        if on_scan is not None:
+            on_scan()
+        return market, active
+
+    with ThreadPoolExecutor(max_workers=config.MARKET_SCAN_WORKERS) as pool:
+        scanned = list(pool.map(fetch, markets))
+    return [(market, obligations) for market, obligations in scanned if obligations]
 
 
 def _is_active(obligation: dict) -> bool:

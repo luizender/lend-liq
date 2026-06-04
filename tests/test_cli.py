@@ -28,7 +28,7 @@ def test_report_found(monkeypatch, fake_kamino, market, sample_position) -> None
     monkeypatch.setattr(
         cli,
         "load_positions",
-        lambda c, r, w, m: [(market, sample_position), (market, sample_position)],
+        lambda c, r, w, m, on_scan=None: [(market, sample_position), (market, sample_position)],
     )
     result = runner.invoke(cli.app, ["report", WALLET])
     assert result.exit_code == 0
@@ -37,7 +37,7 @@ def test_report_found(monkeypatch, fake_kamino, market, sample_position) -> None
 
 def test_report_not_found(monkeypatch, fake_kamino, market) -> None:
     patch_clients(monkeypatch, fake_kamino(markets=[market]))
-    monkeypatch.setattr(cli, "load_positions", lambda c, r, w, m: [])
+    monkeypatch.setattr(cli, "load_positions", lambda c, r, w, m, on_scan=None: [])
     result = runner.invoke(cli.app, ["report", WALLET])
     assert "No Kamino Lend positions" in result.output
 
@@ -55,7 +55,9 @@ def test_report_unknown_market(monkeypatch, fake_kamino, market) -> None:
 
 def test_report_market_filter(monkeypatch, fake_kamino, market, sample_position) -> None:
     patch_clients(monkeypatch, fake_kamino(markets=[market]))
-    monkeypatch.setattr(cli, "load_positions", lambda c, r, w, m: [(market, sample_position)])
+    monkeypatch.setattr(
+        cli, "load_positions", lambda c, r, w, m, on_scan=None: [(market, sample_position)]
+    )
     result = runner.invoke(cli.app, ["report", WALLET, "--market", "MKT", "--no-crash"])
     assert result.exit_code == 0
 
@@ -71,7 +73,9 @@ def test_report_watch_invokes_watch(monkeypatch, fake_kamino, market) -> None:
 
 def test_simulate_command(monkeypatch, fake_kamino, market, sample_position) -> None:
     patch_clients(monkeypatch, fake_kamino(markets=[market]))
-    monkeypatch.setattr(cli, "load_positions", lambda c, r, w, m: [(market, sample_position)])
+    monkeypatch.setattr(
+        cli, "load_positions", lambda c, r, w, m, on_scan=None: [(market, sample_position)]
+    )
     result = runner.invoke(cli.app, ["simulate", WALLET, "-p", "SOL=50"])
     assert result.exit_code == 0
     assert "Simulation" in result.output
@@ -80,7 +84,9 @@ def test_simulate_command(monkeypatch, fake_kamino, market, sample_position) -> 
 
 def test_simulate_warns_on_unheld_symbol(monkeypatch, fake_kamino, market, sample_position) -> None:
     patch_clients(monkeypatch, fake_kamino(markets=[market]))
-    monkeypatch.setattr(cli, "load_positions", lambda c, r, w, m: [(market, sample_position)])
+    monkeypatch.setattr(
+        cli, "load_positions", lambda c, r, w, m, on_scan=None: [(market, sample_position)]
+    )
     result = runner.invoke(cli.app, ["simulate", WALLET, "-p", "SOL=50", "-p", "BONK=1"])
     assert result.exit_code == 0
     assert "No position holds: BONK" in result.output
@@ -88,7 +94,7 @@ def test_simulate_warns_on_unheld_symbol(monkeypatch, fake_kamino, market, sampl
 
 def test_simulate_not_found(monkeypatch, fake_kamino, market) -> None:
     patch_clients(monkeypatch, fake_kamino(markets=[market]))
-    monkeypatch.setattr(cli, "load_positions", lambda c, r, w, m: [])
+    monkeypatch.setattr(cli, "load_positions", lambda c, r, w, m, on_scan=None: [])
     result = runner.invoke(cli.app, ["simulate", WALLET, "-p", "SOL=50"])
     assert "No Kamino Lend positions" in result.output
 

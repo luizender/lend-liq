@@ -65,6 +65,14 @@ def test_render_position_single_collateral_skips_crash(out) -> None:
     assert "Global crash" not in out.getvalue()
 
 
+def test_scan_progress_ticks_without_rendering(out) -> None:
+    with render.scan_progress(2) as tick:
+        tick()
+        tick()
+    # The bar is transient and the test console is not a terminal, so it never renders.
+    assert "Scanning markets" not in out.getvalue()
+
+
 def test_health_color_thresholds() -> None:
     assert render._health_color(2.0) == "green"
     assert render._health_color(1.2) == "yellow"
