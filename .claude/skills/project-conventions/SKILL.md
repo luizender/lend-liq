@@ -33,7 +33,7 @@ factor (`liquidation.py::apply_price_overrides`).
 - `pylint kamino_liq` stays **10.00/10**.
 
 Run all three:
-`.venv/bin/ruff check kamino_liq tests && .venv/bin/pytest -q && .venv/bin/pylint kamino_liq`
+`.venv/bin/ruff check kamino_liq tests && .venv/bin/ruff format --check kamino_liq tests && .venv/bin/pytest -q --cov --cov-report=term-missing && .venv/bin/pylint kamino_liq`
 
 A `Stop` hook runs this gate automatically; a `PostToolUse` hook applies `ruff` on
 each edit. Every new function needs a test in the matching `tests/test_*.py`.

@@ -1,5 +1,7 @@
 # kamino-liq
 
+[![CI](https://github.com/luizender/kamino-liq/actions/workflows/ci.yml/badge.svg)](https://github.com/luizender/kamino-liq/actions/workflows/ci.yml)
+
 A small, **read-only** command-line tool that reads a Solana wallet's live
 [Kamino Lend](https://app.kamino.finance) position and tells you **at what prices
 it gets liquidated** — pulling the position, prices, and liquidation thresholds

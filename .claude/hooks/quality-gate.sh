@@ -13,7 +13,7 @@ fi
 venv="$CLAUDE_PROJECT_DIR/.venv/bin"
 if out=$("$venv/ruff" check kamino_liq tests 2>&1) \
     && out=$("$venv/ruff" format --check kamino_liq tests 2>&1) \
-    && out=$("$venv/pytest" -q 2>&1) \
+    && out=$("$venv/pytest" -q --cov --cov-report=term-missing 2>&1) \
     && out=$("$venv/pylint" kamino_liq 2>&1); then
     exit 0
 fi
