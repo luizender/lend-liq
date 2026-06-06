@@ -29,8 +29,9 @@ def detect_protocol(address: str) -> str:
 def resolve(address: str, protocol: str, chain: str | None) -> tuple[str, Loader]:
     """Return ``(protocol, loader)`` for ``address``. ``protocol`` may be ``auto``.
 
-    Raises ``ValueError`` on a bad address, a missing/unknown chain, or a chain
-    passed to Kamino — the CLI turns these into usage errors."""
+    Raises ``ValueError`` on a bad address, an unknown chain, or a chain passed to
+    Kamino — the CLI turns these into usage errors. A missing Aave chain is not an
+    error: it defaults to scanning every supported chain."""
     if protocol == "auto":
         protocol = detect_protocol(address)
     if protocol == "kamino":
@@ -50,9 +51,9 @@ def _kamino_loader(address: str, chain: str | None) -> Loader:
 
 def _aave_loader(address: str, chain: str | None) -> Loader:
     _validate_evm(address)
-    chain_id = _chain_id(chain)
+    chain_ids = _chain_ids(chain)
     client = AaveClient()
-    return lambda: aave_service.load_positions(client, address, chain_id)
+    return lambda: aave_service.load_positions(client, address, chain_ids)
 
 
 def _validate_solana(address: str) -> None:
@@ -67,11 +68,13 @@ def _validate_evm(address: str) -> None:
         raise ValueError("not a valid EVM address (expected 0x + 40 hex chars)")
 
 
-def _chain_id(chain: str | None) -> int:
+def _chain_ids(chain: str | None) -> list[int]:
+    """The chain ids to scan: just the named one, or — by default — every supported
+    chain, mirroring Kamino's all-markets sweep."""
     if not chain:
-        raise ValueError("aave requires --chain (e.g. ethereum, arbitrum)")
+        return list(config.AAVE_CHAINS.values())
     try:
-        return config.AAVE_CHAINS[chain.lower()]
+        return [config.AAVE_CHAINS[chain.lower()]]
     except KeyError as exc:
         supported = ", ".join(sorted(config.AAVE_CHAINS))
         raise ValueError(f"unknown chain {chain!r}; supported: {supported}") from exc

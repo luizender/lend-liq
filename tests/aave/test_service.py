@@ -16,18 +16,19 @@ def _reserve(symbol, address, lt, emode_lt=None):
     }
 
 
-def _market(address=MKT, name="AaveV3Ethereum", reserves=(), health_factor=None):
+def _market(address=MKT, name="AaveV3Ethereum", reserves=(), health_factor=None, chain_id=1):
     return {
         "address": address,
         "name": name,
+        "chain": {"chainId": chain_id},
         "userState": {"healthFactor": health_factor, "eModeEnabled": False},
         "reserves": list(reserves),
     }
 
 
-def _supply(symbol, address, amount, price, is_collateral=True, market=MKT):
+def _supply(symbol, address, amount, price, is_collateral=True, market=MKT, chain_id=1):
     return {
-        "market": {"address": market},
+        "market": {"address": market, "chain": {"chainId": chain_id}},
         "currency": {"symbol": symbol, "address": address},
         "balance": {
             "amount": {"value": str(amount)},
@@ -38,9 +39,9 @@ def _supply(symbol, address, amount, price, is_collateral=True, market=MKT):
     }
 
 
-def _borrow(symbol, address, amount, price, market=MKT):
+def _borrow(symbol, address, amount, price, market=MKT, chain_id=1):
     return {
-        "market": {"address": market},
+        "market": {"address": market, "chain": {"chainId": chain_id}},
         "currency": {"symbol": symbol, "address": address},
         "debt": {
             "amount": {"value": str(amount)},
@@ -57,7 +58,7 @@ def test_builds_position_with_threshold_and_plain_debt(fake_aave):
         borrows=[_borrow("USDC", USDC, 1000, 1.0)],
     )
 
-    (position,) = list(aave_service.load_positions(client, "0xU", 1))
+    (position,) = list(aave_service.load_positions(client, "0xU", [1]))
     assert position.market_name == "AaveV3Ethereum"
     weth = position.collateral[0]
     assert (weth.symbol, weth.amount, weth.price, weth.liquidation_threshold) == (
@@ -78,7 +79,7 @@ def test_emode_threshold_overrides_reserve_threshold(fake_aave):
         borrows=[_borrow("USDC", USDC, 100, 1.0)],
     )
 
-    (position,) = list(aave_service.load_positions(client, "0xU", 1))
+    (position,) = list(aave_service.load_positions(client, "0xU", [1]))
     assert position.collateral[0].liquidation_threshold == 0.93
 
 
@@ -89,7 +90,7 @@ def test_non_collateral_supply_excluded(fake_aave):
         borrows=[_borrow("USDC", USDC, 100, 1.0)],
     )
 
-    (position,) = list(aave_service.load_positions(client, "0xU", 1))
+    (position,) = list(aave_service.load_positions(client, "0xU", [1]))
     assert position.collateral == ()
 
 
@@ -100,13 +101,13 @@ def test_debt_value_is_plain_usd_sum(fake_aave):
         borrows=[_borrow("USDC", USDC, 1000, 1.0), _borrow("WETH", WETH, 1, 1600.0)],
     )
 
-    (position,) = list(aave_service.load_positions(client, "0xU", 1))
+    (position,) = list(aave_service.load_positions(client, "0xU", [1]))
     assert position.debt_value == 2600.0
 
 
 def test_market_without_positions_is_skipped(fake_aave):
     client = fake_aave(markets=[_market(reserves=[_reserve("WETH", WETH, 0.83)])])
-    assert list(aave_service.load_positions(client, "0xU", 1)) == []
+    assert list(aave_service.load_positions(client, "0xU", [1])) == []
 
 
 def test_groups_positions_by_market(fake_aave):
@@ -122,7 +123,43 @@ def test_groups_positions_by_market(fake_aave):
         borrows=[_borrow("USDC", USDC, 100, 1.0, market=other)],
     )
 
-    positions = {p.market_name: p for p in aave_service.load_positions(client, "0xU", 1)}
+    positions = {p.market_name: p for p in aave_service.load_positions(client, "0xU", [1])}
     assert set(positions) == {"AaveV3Ethereum", "AaveV3EthereumLido"}
     assert positions["AaveV3Ethereum"].debt_value == 0.0
     assert positions["AaveV3EthereumLido"].collateral[0].liquidation_threshold == 0.85
+
+
+def test_same_pool_address_on_different_chains_stays_separate(fake_aave):
+    # One pool address is reused across chains (Arbitrum, Polygon, ...); scanning
+    # both must keep the positions distinct rather than collapsing them by address.
+    shared = "0x794a61358D6845594F94dc1DB02A252b5b4814aD"
+    client = fake_aave(
+        markets=[
+            _market(
+                address=shared,
+                name="AaveV3Arbitrum",
+                chain_id=42161,
+                reserves=[_reserve("WETH", WETH, 0.83)],
+            ),
+            _market(
+                address=shared,
+                name="AaveV3Polygon",
+                chain_id=137,
+                reserves=[_reserve("WETH", WETH, 0.85)],
+            ),
+        ],
+        supplies=[
+            _supply("WETH", WETH, 1, 1600.0, market=shared, chain_id=42161),
+            _supply("WETH", WETH, 2, 1600.0, market=shared, chain_id=137),
+        ],
+        borrows=[_borrow("USDC", USDC, 100, 1.0, market=shared, chain_id=137)],
+    )
+
+    positions = {p.market_name: p for p in aave_service.load_positions(client, "0xU", [42161, 137])}
+    assert set(positions) == {"AaveV3Arbitrum", "AaveV3Polygon"}
+    assert positions["AaveV3Arbitrum"].collateral[0].amount == 1
+    assert positions["AaveV3Arbitrum"].collateral[0].liquidation_threshold == 0.83
+    assert positions["AaveV3Arbitrum"].debt_value == 0.0
+    assert positions["AaveV3Polygon"].collateral[0].amount == 2
+    assert positions["AaveV3Polygon"].collateral[0].liquidation_threshold == 0.85
+    assert positions["AaveV3Polygon"].debt_value == 100.0

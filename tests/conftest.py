@@ -75,7 +75,7 @@ def fake_aave():
             self._supplies: list[dict] = list(supplies)
             self._borrows: list[dict] = list(borrows)
 
-        def markets(self, chain_id: int, user: str) -> list[dict]:
+        def markets(self, chain_ids: list[int], user: str) -> list[dict]:
             return self._markets
 
         def user_positions(self, markets: list[dict], user: str) -> dict:

@@ -14,6 +14,7 @@ _MARKETS_QUERY = """query Markets($req: MarketsRequest!) {
   markets(request: $req) {
     address
     name
+    chain { chainId }
     userState { healthFactor eModeEnabled }
     reserves {
       underlyingToken { symbol address }
@@ -28,13 +29,13 @@ _POSITIONS_QUERY = """query Positions(
   $borrows: UserBorrowsRequest!
 ) {
   userSupplies(request: $supplies) {
-    market { address }
+    market { address chain { chainId } }
     currency { symbol address }
     balance { amount { value } usdPerToken usd }
     isCollateral
   }
   userBorrows(request: $borrows) {
-    market { address }
+    market { address chain { chainId } }
     currency { symbol address }
     debt { amount { value } usdPerToken usd }
   }
@@ -67,10 +68,10 @@ class AaveClient:
             raise AaveApiError(payload["errors"])
         return payload["data"]
 
-    def markets(self, chain_id: int, user: str) -> list[dict]:
-        """Return every Aave market on ``chain_id`` with its reserves' liquidation
-        thresholds and ``user``'s per-reserve eMode state."""
-        data = self._post(_MARKETS_QUERY, {"req": {"chainIds": [chain_id], "user": user}})
+    def markets(self, chain_ids: list[int], user: str) -> list[dict]:
+        """Return every Aave market across ``chain_ids`` with its chain id, its
+        reserves' liquidation thresholds, and ``user``'s per-reserve eMode state."""
+        data = self._post(_MARKETS_QUERY, {"req": {"chainIds": chain_ids, "user": user}})
         return data["markets"]
 
     def user_positions(self, markets: list[dict], user: str) -> dict:

@@ -21,9 +21,9 @@ class Protocol(str, enum.Enum):
     AAVE = "aave"
 
 
-# --chain choices, derived from the supported Aave deployments so the chain
-# names stay defined in one place (config.AAVE_CHAINS).
-Chain = enum.Enum("Chain", {name: name for name in config.AAVE_CHAINS}, type=str)
+# --chain choices: "all" (sweep every deployment) plus each supported Aave chain,
+# whose names stay defined in one place (config.AAVE_CHAINS).
+Chain = enum.Enum("Chain", {"all": "all", **{name: name for name in config.AAVE_CHAINS}}, type=str)
 
 
 app = typer.Typer(
@@ -39,7 +39,10 @@ _PROTOCOL_OPTION = typer.Option(
     help="Protocol: kamino, aave, or auto (detect from the address).",
 )
 _CHAIN_OPTION = typer.Option(
-    None, "--chain", "-c", help="Aave chain (e.g. ethereum, arbitrum); required with aave."
+    Chain["all"],
+    "--chain",
+    "-c",
+    help="Aave chain (e.g. ethereum, arbitrum); 'all' (the default) scans every chain.",
 )
 
 
@@ -68,7 +71,7 @@ def report(
         ..., help="Wallet address: a Solana key (Kamino) or EVM 0x address (Aave). Read-only."
     ),
     protocol: Protocol = _PROTOCOL_OPTION,
-    chain: Chain | None = _CHAIN_OPTION,
+    chain: Chain = _CHAIN_OPTION,
     crash: bool = typer.Option(
         True, "--crash/--no-crash", help="Include the global market-crash scenario."
     ),
@@ -91,7 +94,7 @@ def simulate_command(
         ..., help="Wallet address: a Solana key (Kamino) or EVM 0x address (Aave). Read-only."
     ),
     protocol: Protocol = _PROTOCOL_OPTION,
-    chain: Chain | None = _CHAIN_OPTION,
+    chain: Chain = _CHAIN_OPTION,
     price: list[str] = typer.Option(
         None, "--price", "-p", help="Override an asset price, e.g. -p SOL=120 (repeatable)."
     ),
@@ -120,9 +123,11 @@ def simulate_command(
 # --------------------------------------------------------------------------- #
 # Helpers
 # --------------------------------------------------------------------------- #
-def _resolve(wallet: str, protocol: Protocol, chain: Chain | None) -> tuple[str, sources.Loader]:
+def _resolve(wallet: str, protocol: Protocol, chain: Chain) -> tuple[str, sources.Loader]:
+    # "all" carries no specific chain; sources reads a missing chain as scan-every-chain.
+    chain_arg = None if chain.value == "all" else chain.value
     try:
-        name, loader = sources.resolve(wallet, protocol.value, chain.value if chain else None)
+        name, loader = sources.resolve(wallet, protocol.value, chain_arg)
     except ValueError as exc:
         raise typer.BadParameter(str(exc)) from exc
     return sources.LABELS[name], loader

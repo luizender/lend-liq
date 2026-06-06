@@ -2,7 +2,7 @@
 
 import pytest
 
-from lend_liq import sources
+from lend_liq import config, sources
 
 WALLET = "11111111111111111111111111111111"  # valid base58 (system program)
 EVM = "0x" + "ab" * 20
@@ -42,8 +42,8 @@ def test_resolve_kamino_rejects_bad_key():
 def test_resolve_aave_returns_loader(monkeypatch):
     captured = {}
 
-    def fake_load(client, address, chain_id):
-        captured["args"] = (client, address, chain_id)
+    def fake_load(client, address, chain_ids):
+        captured["args"] = (client, address, chain_ids)
         return ["pos"]
 
     monkeypatch.setattr(sources, "AaveClient", lambda: "client")
@@ -52,12 +52,22 @@ def test_resolve_aave_returns_loader(monkeypatch):
     protocol, loader = sources.resolve(EVM, "auto", "ethereum")
     assert protocol == "aave"
     assert loader() == ["pos"]
-    assert captured["args"] == ("client", EVM, 1)
+    assert captured["args"] == ("client", EVM, [1])
 
 
-def test_resolve_aave_requires_chain():
-    with pytest.raises(ValueError, match="requires --chain"):
-        sources.resolve(EVM, "aave", None)
+def test_resolve_aave_without_chain_scans_all(monkeypatch):
+    captured = {}
+
+    def fake_load(client, address, chain_ids):
+        captured["chain_ids"] = chain_ids
+        return ["pos"]
+
+    monkeypatch.setattr(sources, "AaveClient", lambda: "client")
+    monkeypatch.setattr(sources.aave_service, "load_positions", fake_load)
+
+    _, loader = sources.resolve(EVM, "aave", None)
+    assert loader() == ["pos"]
+    assert captured["chain_ids"] == list(config.AAVE_CHAINS.values())
 
 
 def test_resolve_aave_unknown_chain():

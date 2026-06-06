@@ -40,6 +40,14 @@ def test_report_aave_not_found(monkeypatch) -> None:
     assert "No Aave positions" in result.output
 
 
+def test_report_aave_chain_all(monkeypatch, sample_position) -> None:
+    # "all" is a valid --chain choice (the every-chain sweep).
+    patch_resolve(monkeypatch, "aave", lambda: [sample_position])
+    result = runner.invoke(cli.app, ["report", EVM, "--chain", "all"])
+    assert result.exit_code == 0
+    assert "Health factor" in result.output
+
+
 def test_report_invalid_wallet() -> None:
     result = runner.invoke(cli.app, ["report", "not-a-key!"])
     assert result.exit_code != 0
