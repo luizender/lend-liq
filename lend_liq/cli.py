@@ -9,7 +9,7 @@ from datetime import datetime
 import typer
 
 from . import __version__, config, sources
-from .liquidation import apply_price_overrides
+from .liquidation import AmountChange, apply_overrides
 from .render import console, render_position, render_simulation
 
 
@@ -98,24 +98,36 @@ def simulate_command(
     price: list[str] = typer.Option(
         None, "--price", "-p", help="Override an asset price, e.g. -p SOL=120 (repeatable)."
     ),
+    amount: list[str] = typer.Option(
+        None,
+        "--amount",
+        "-a",
+        help="Change an asset amount: -a SOL=+10 (add), -a SOL=-5 (remove), -a SOL=200 (set). "
+        "Repeatable.",
+    ),
     crash: bool = typer.Option(
         True, "--crash/--no-crash", help="Include the global market-crash scenario."
     ),
 ) -> None:
-    """Recompute WALLET's liquidation health under hypothetical prices."""
-    overrides = _parse_overrides(price or [])
+    """Recompute WALLET's liquidation health under hypothetical prices and amounts."""
+    prices = _parse_prices(price or [])
+    amounts = _parse_amounts(amount or [])
+    if not prices and not amounts:
+        raise typer.BadParameter(
+            "provide at least one --price or --amount change", param_hint="--price/--amount"
+        )
     label, loader = _resolve(wallet, protocol, chain)
 
     held: set[str] = set()
     for position in loader():
-        render_simulation(position, apply_price_overrides(position, overrides), show_crash=crash)
+        render_simulation(position, apply_overrides(position, prices, amounts), show_crash=crash)
         held.update(c.symbol.upper() for c in position.collateral)
         held.update(b.symbol.upper() for b in position.borrows)
 
     if not held:
         console.print(f"[yellow]No {label} positions found for {wallet}.[/yellow]")
         return
-    unknown = sorted(set(overrides) - held)
+    unknown = sorted((set(prices) | set(amounts)) - held)
     if unknown:
         console.print(f"[yellow]No position holds: {', '.join(unknown)}.[/yellow]")
 
@@ -133,9 +145,7 @@ def _resolve(wallet: str, protocol: Protocol, chain: Chain) -> tuple[str, source
     return sources.LABELS[name], loader
 
 
-def _parse_overrides(items: list[str]) -> dict[str, float]:
-    if not items:
-        raise typer.BadParameter("provide at least one SYMBOL=PRICE", param_hint="--price")
+def _parse_prices(items: list[str]) -> dict[str, float]:
     overrides: dict[str, float] = {}
     for item in items:
         symbol, sep, value = item.partition("=")
@@ -146,6 +156,21 @@ def _parse_overrides(items: list[str]) -> dict[str, float]:
         except ValueError as exc:
             raise typer.BadParameter(f"{value!r} is not a number", param_hint="--price") from exc
     return overrides
+
+
+def _parse_amounts(items: list[str]) -> dict[str, AmountChange]:
+    # A leading +/- means adjust by that much; a bare number sets the amount outright.
+    amounts: dict[str, AmountChange] = {}
+    for item in items:
+        symbol, sep, value = item.partition("=")
+        if not sep or not symbol.strip():
+            raise typer.BadParameter(f"expected SYMBOL=AMOUNT, got {item!r}", param_hint="--amount")
+        is_delta = value.strip().startswith(("+", "-"))
+        try:
+            amounts[symbol.strip().upper()] = AmountChange(float(value), is_delta)
+        except ValueError as exc:
+            raise typer.BadParameter(f"{value!r} is not a number", param_hint="--amount") from exc
+    return amounts
 
 
 def _report_once(wallet: str, label: str, loader: sources.Loader, crash: bool) -> None:

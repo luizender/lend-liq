@@ -4,8 +4,9 @@ import math
 from collections.abc import Iterable
 
 from lend_liq.liquidation import (
+    AmountChange,
     CrashStatus,
-    apply_price_overrides,
+    apply_overrides,
     crash_scenario,
     single_asset_levels,
 )
@@ -110,7 +111,7 @@ def test_crash_gated_when_debt_is_volatile() -> None:
 def test_apply_overrides_reprices_collateral_and_keeps_stable_debt() -> None:
     sol = Collateral("SOL", amount=100, price=100, liquidation_threshold=0.8)
     pos = make_position([sol], debt_value=4_000, borrows=[Borrow("USDC", 4_000, 1.0)])
-    simulated = apply_price_overrides(pos, {"SOL": 50.0})
+    simulated = apply_overrides(pos, {"SOL": 50.0})
     assert simulated.collateral[0].price == 50.0
     # Stable debt price is unchanged, so the adjusted debt is untouched.
     assert simulated.debt_value == 4_000
@@ -121,7 +122,7 @@ def test_apply_overrides_rescales_volatile_debt() -> None:
     # debt_value carries a 1.2x borrow factor (4800 adjusted on 4000 borrowed).
     sol = Collateral("SOL", amount=100, price=100, liquidation_threshold=0.8)
     pos = make_position([sol], debt_value=4_800, borrows=[Borrow("ETH", 2, 2_000)])
-    simulated = apply_price_overrides(pos, {"ETH": 1_000.0})  # halve the debt price
+    simulated = apply_overrides(pos, {"ETH": 1_000.0})  # halve the debt price
     assert simulated.borrows[0].price == 1_000.0
     assert simulated.debt_value == 2_400  # factor 1.2 preserved on the new 2000 borrowed
 
@@ -129,9 +130,40 @@ def test_apply_overrides_rescales_volatile_debt() -> None:
 def test_apply_overrides_without_borrows_is_a_noop_on_debt() -> None:
     sol = Collateral("SOL", amount=10, price=100, liquidation_threshold=0.8)
     pos = make_position([sol], debt_value=0)
-    simulated = apply_price_overrides(pos, {"DOGE": 1.0})  # symbol not held -> no change
+    simulated = apply_overrides(pos, {"DOGE": 1.0})  # symbol not held -> no change
     assert simulated.collateral[0].price == 100
     assert simulated.debt_value == 0
+
+
+def test_amount_change_delta_and_absolute() -> None:
+    assert AmountChange(10.0, is_delta=True).applied_to(5) == 15.0  # add to current
+    assert AmountChange(-8.0, is_delta=True).applied_to(5) == 0.0  # floored, not -3
+    assert AmountChange(20.0, is_delta=False).applied_to(5) == 20.0  # set outright
+
+
+def test_apply_overrides_increases_collateral_amount() -> None:
+    sol = Collateral("SOL", amount=100, price=100, liquidation_threshold=0.8)
+    pos = make_position([sol], debt_value=4_000, borrows=[Borrow("USDC", 4_000, 1.0)])
+    simulated = apply_overrides(pos, {}, {"SOL": AmountChange(50.0, is_delta=True)})
+    assert simulated.collateral[0].amount == 150  # 100 + 50 deposited
+    assert simulated.debt_value == 4_000  # collateral change leaves the debt alone
+    assert simulated.health_factor == 3.0  # 150*100*0.8 / 4000
+
+
+def test_apply_overrides_changing_borrow_amount_rescales_debt() -> None:
+    # 1.2x borrow factor: 4800 adjusted on 4000 borrowed (ETH 2 @ 2000).
+    sol = Collateral("SOL", amount=100, price=100, liquidation_threshold=0.8)
+    pos = make_position([sol], debt_value=4_800, borrows=[Borrow("ETH", 2, 2_000)])
+    simulated = apply_overrides(pos, {}, {"ETH": AmountChange(-1.0, is_delta=True)})  # repay 1 ETH
+    assert simulated.borrows[0].amount == 1
+    assert simulated.debt_value == 2_400  # factor 1.2 preserved on the new 2000 borrowed
+
+
+def test_apply_overrides_sets_absolute_amount() -> None:
+    sol = Collateral("SOL", amount=100, price=100, liquidation_threshold=0.8)
+    pos = make_position([sol], debt_value=4_000, borrows=[Borrow("USDC", 4_000, 1.0)])
+    simulated = apply_overrides(pos, {}, {"SOL": AmountChange(50.0, is_delta=False)})
+    assert simulated.collateral[0].amount == 50  # set outright, not 150
 
 
 def test_position_without_collateral_has_zero_metrics() -> None:

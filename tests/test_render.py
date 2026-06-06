@@ -6,7 +6,7 @@ import pytest
 from rich.console import Console
 
 from lend_liq import render
-from lend_liq.liquidation import apply_price_overrides
+from lend_liq.liquidation import AmountChange, apply_overrides
 from lend_liq.models import Borrow, Collateral, Position
 
 
@@ -89,7 +89,7 @@ def test_render_crash_volatile_debt(out) -> None:
 def test_render_simulation_shows_changes_and_verdict(out) -> None:
     sol = Collateral("SOL", 100, 100, 0.8)
     original = position([sol], 4000, [Borrow("USDC", 4000, 1.0)])
-    simulated = apply_price_overrides(original, {"SOL": 40.0})
+    simulated = apply_overrides(original, {"SOL": 40.0})
     render.render_simulation(original, simulated)
     text = out.getvalue()
     assert "Simulation" in text
@@ -98,17 +98,28 @@ def test_render_simulation_shows_changes_and_verdict(out) -> None:
     assert "would be liquidated" in text
 
 
+def test_render_simulation_shows_amount_changes(out) -> None:
+    sol = Collateral("SOL", 100, 100, 0.8)
+    original = position([sol], 4000, [Borrow("USDC", 4000, 1.0)])
+    simulated = apply_overrides(original, {}, {"SOL": AmountChange(50.0, is_delta=True)})
+    render.render_simulation(original, simulated)
+    text = out.getvalue()
+    assert "Simulated amount changes" in text
+    assert "150.0000" in text  # 100 + 50 SOL deposited
+    assert "+50.0%" in text  # amount grew by half
+
+
 def test_render_simulation_no_matching_changes(out) -> None:
     sol = Collateral("SOL", 100, 100, 0.8)
     original = position([sol], 4000, [Borrow("USDC", 4000, 1.0)])
     render.render_simulation(original, original)
-    assert "No simulated price changes" in out.getvalue()
+    assert "No simulated changes" in out.getvalue()
 
 
 def test_render_simulation_no_debt_skips_health_line(out) -> None:
     sol = Collateral("SOL", 100, 100, 0.8)
     original = position([sol], 0)  # no debt -> no health-factor line
-    simulated = apply_price_overrides(original, {"SOL": 50.0})
+    simulated = apply_overrides(original, {"SOL": 50.0})
     render.render_simulation(original, simulated)
     text = out.getvalue()
     assert "Simulated price changes" in text

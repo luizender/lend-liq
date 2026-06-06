@@ -6,7 +6,7 @@ from __future__ import annotations
 import enum
 from dataclasses import dataclass, replace
 
-from .models import Collateral, Position
+from .models import Borrow, Collateral, Position
 
 
 @dataclass(frozen=True)
@@ -87,16 +87,42 @@ def crash_scenario(position: Position) -> CrashScenario:
     return CrashScenario(CrashStatus.TRIGGERABLE, drop=1 - remaining, prices=prices)
 
 
-def apply_price_overrides(position: Position, overrides: dict[str, float]) -> Position:
-    """Return a copy of `position` with collateral and borrow prices replaced by
-    `overrides` (keyed by upper-case symbol). The borrow-factor-adjusted debt is
-    rescaled by its current aggregate factor, so overriding a borrow's price moves
-    the debt consistently — exact for a single-borrow position."""
+@dataclass(frozen=True)
+class AmountChange:
+    """A simulated change to an asset's amount: an absolute target, or — when
+    `is_delta` — a signed adjustment added to the current amount (floored at 0)."""
+
+    value: float
+    is_delta: bool
+
+    def applied_to(self, amount: float) -> float:
+        """The new amount after this change is applied to the current `amount`."""
+        return max(0.0, amount + self.value) if self.is_delta else self.value
+
+
+def _amount(asset: Collateral | Borrow, amounts: dict[str, AmountChange]) -> float:
+    change = amounts.get(asset.symbol.upper())
+    return change.applied_to(asset.amount) if change else asset.amount
+
+
+def apply_overrides(
+    position: Position,
+    prices: dict[str, float],
+    amounts: dict[str, AmountChange] | None = None,
+) -> Position:
+    """Return a copy of `position` with collateral and borrow prices and amounts
+    replaced by `prices` and `amounts` (keyed by upper-case symbol). The
+    borrow-factor-adjusted debt is rescaled by its current aggregate factor, so
+    overriding a borrow's price or amount moves the debt consistently — exact for a
+    single-borrow position."""
+    amounts = amounts or {}
     collateral = tuple(
-        replace(c, price=overrides.get(c.symbol.upper(), c.price)) for c in position.collateral
+        replace(c, price=prices.get(c.symbol.upper(), c.price), amount=_amount(c, amounts))
+        for c in position.collateral
     )
     borrows = tuple(
-        replace(b, price=overrides.get(b.symbol.upper(), b.price)) for b in position.borrows
+        replace(b, price=prices.get(b.symbol.upper(), b.price), amount=_amount(b, amounts))
+        for b in position.borrows
     )
     old_borrowed = sum(b.value for b in position.borrows)
     factor = position.debt_value / old_borrowed if old_borrowed else 1.0

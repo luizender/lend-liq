@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
 from rich import box
 from rich.console import Console
 from rich.table import Table
 
 from .liquidation import CrashStatus, crash_scenario, single_asset_levels
-from .models import Position
+from .models import Borrow, Collateral, Position
 
 console = Console()
 
@@ -18,6 +20,10 @@ _CAUTION = 1.15
 
 def _usd(value: float) -> str:
     return f"${value:,.2f}"
+
+
+def _amount_str(value: float) -> str:
+    return f"{value:,.4f}"
 
 
 def _health_color(health_factor: float) -> str:
@@ -64,21 +70,20 @@ def _render_body(position: Position, show_crash: bool) -> None:
 
 
 def _render_overrides(original: Position, simulated: Position) -> None:
-    assets = list(zip(original.collateral, simulated.collateral, strict=True)) + list(
+    pairs = list(zip(original.collateral, simulated.collateral, strict=True)) + list(
         zip(original.borrows, simulated.borrows, strict=True)
     )
-    rows = [(before, after) for before, after in assets if before.price != after.price]
-    if not rows:
-        console.print("[dim]No simulated price changes apply to this position.[/dim]\n")
+    price_rows = [(before, after) for before, after in pairs if before.price != after.price]
+    amount_rows = [(before, after) for before, after in pairs if before.amount != after.amount]
+    if not price_rows and not amount_rows:
+        console.print("[dim]No simulated changes apply to this position.[/dim]\n")
         return
-    table = _table("Simulated price changes")
-    table.add_column("Asset")
-    for name in ("Original", "Simulated", "Change"):
-        table.add_column(name, justify="right")
-    for before, after in rows:
-        change = (after.price - before.price) / before.price if before.price else 0.0
-        table.add_row(after.symbol, _usd(before.price), _usd(after.price), f"{change:+.1%}")
-    console.print(table)
+    if price_rows:
+        _render_change_table("Simulated price changes", price_rows, lambda a: a.price, _usd)
+    if amount_rows:
+        _render_change_table(
+            "Simulated amount changes", amount_rows, lambda a: a.amount, _amount_str
+        )
     if simulated.has_debt:
         color = _health_color(simulated.health_factor)
         verdict = "  [red]would be liquidated[/red]" if simulated.health_factor < 1.0 else ""
@@ -86,6 +91,23 @@ def _render_overrides(original: Position, simulated: Position) -> None:
             f"Health factor: {original.health_factor:.2f} → "
             f"[{color}]{simulated.health_factor:.2f}[/{color}]{verdict}\n"
         )
+
+
+def _render_change_table(
+    title: str,
+    rows: list[tuple[Collateral | Borrow, Collateral | Borrow]],
+    value: Callable[[Collateral | Borrow], float],
+    fmt: Callable[[float], str],
+) -> None:
+    table = _table(title)
+    table.add_column("Asset")
+    for name in ("Original", "Simulated", "Change"):
+        table.add_column(name, justify="right")
+    for before, after in rows:
+        before_v, after_v = value(before), value(after)
+        change = (after_v - before_v) / before_v if before_v else 0.0
+        table.add_row(after.symbol, fmt(before_v), fmt(after_v), f"{change:+.1%}")
+    console.print(table)
 
 
 def _render_holdings(position: Position) -> None:
