@@ -14,7 +14,7 @@ from .aave import service as aave_service
 from .aave.api import AaveClient
 from .kamino import service
 from .kamino.api import KaminoClient
-from .models import Position
+from .models import Position, ReserveInfo
 
 Loader = Callable[[], Iterator[Position]]
 LABELS = {"kamino": "Kamino Lend", "aave": "Aave"}
@@ -26,8 +26,10 @@ def detect_protocol(address: str) -> str:
     return "aave" if _EVM_ADDRESS.match(address) else "kamino"
 
 
-def resolve(address: str, protocol: str, chain: str | None) -> tuple[str, Loader]:
-    """Return ``(protocol, loader)`` for ``address``. ``protocol`` may be ``auto``.
+def resolve(
+    address: str, protocol: str, chain: str | None
+) -> tuple[str, Loader, Callable[[str, str], ReserveInfo | None]]:
+    """Return ``(protocol, loader, reserves)`` for ``address``. ``protocol`` may be ``auto``.
 
     Raises ``ValueError`` on a bad address, an unknown chain, or a chain passed to
     Kamino — the CLI turns these into usage errors. A missing Aave chain is not an
@@ -35,25 +37,55 @@ def resolve(address: str, protocol: str, chain: str | None) -> tuple[str, Loader
     if protocol == "auto":
         protocol = detect_protocol(address)
     if protocol == "kamino":
-        return protocol, _kamino_loader(address, chain)
+        loader, reserves = _kamino_loader(address, chain)
+        return protocol, loader, reserves
     if protocol == "aave":
-        return protocol, _aave_loader(address, chain)
+        loader, reserves = _aave_loader(address, chain)
+        return protocol, loader, reserves
     raise ValueError(f"unknown protocol {protocol!r}; choose kamino, aave, or auto")
 
 
-def _kamino_loader(address: str, chain: str | None) -> Loader:
+def _kamino_loader(
+    address: str, chain: str | None
+) -> tuple[Loader, Callable[[str, str], ReserveInfo | None]]:
     if chain:
         raise ValueError("--chain only applies to aave")
     _validate_solana(address)
     client = KaminoClient()
-    return lambda: service.load_positions(client, address)
+
+    def loader() -> Iterator[Position]:
+        return service.load_positions(client, address)
+
+    cache: dict[tuple[str, str], ReserveInfo | None] = {}
+
+    def reserves(market_id: str, symbol: str) -> ReserveInfo | None:
+        key = (market_id, symbol.upper())
+        if key not in cache:
+            cache[key] = service.resolve_reserve(client, market_id, symbol)
+        return cache[key]
+
+    return loader, reserves
 
 
-def _aave_loader(address: str, chain: str | None) -> Loader:
+def _aave_loader(
+    address: str, chain: str | None
+) -> tuple[Loader, Callable[[str, str], ReserveInfo | None]]:
     _validate_evm(address)
     chain_ids = _chain_ids(chain)
     client = AaveClient()
-    return lambda: aave_service.load_positions(client, address, chain_ids)
+
+    def loader() -> Iterator[Position]:
+        return aave_service.load_positions(client, address, chain_ids)
+
+    cache: dict[tuple[str, str], ReserveInfo | None] = {}
+
+    def reserves(market_id: str, symbol: str) -> ReserveInfo | None:
+        key = (market_id, symbol.upper())
+        if key not in cache:
+            cache[key] = aave_service.resolve_reserve(client, address, market_id, symbol)
+        return cache[key]
+
+    return loader, reserves
 
 
 def _validate_solana(address: str) -> None:

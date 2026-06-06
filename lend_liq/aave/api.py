@@ -20,6 +20,7 @@ _MARKETS_QUERY = """query Markets($req: MarketsRequest!) {
       underlyingToken { symbol address }
       supplyInfo { liquidationThreshold { value } }
       userState { emode { liquidationThreshold { value } } }
+      usdExchangeRate
     }
   }
 }"""

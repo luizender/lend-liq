@@ -6,7 +6,7 @@ import pytest
 from rich.console import Console
 
 from lend_liq import render
-from lend_liq.liquidation import AmountChange, apply_overrides
+from lend_liq.liquidation import AmountChange, Changes, apply_overrides
 from lend_liq.models import Borrow, Collateral, Position
 
 
@@ -90,7 +90,9 @@ def test_render_crash_comparison_both_triggerable(out) -> None:
     usdc = Collateral("USDC", 100, 1.0, 0.9)  # stable, cap 90
     sol = Collateral("SOL", 10, 100, 0.8)  # volatile, cap 800
     original = position([usdc, sol], 490, [Borrow("USDC", 490, 1.0)])  # remaining 0.5
-    simulated = apply_overrides(original, {}, {"SOL": AmountChange(10.0, is_delta=True)})
+    simulated = apply_overrides(
+        original, Changes(collateral_amounts={"SOL": AmountChange(10.0, is_delta=True)})
+    )
     render._render_crash_comparison(original, simulated)
     text = out.getvalue()
     assert "Real liq." in text
@@ -107,7 +109,9 @@ def test_render_crash_comparison_status_mismatch(out) -> None:
     usdc = Collateral("USDC", 100, 1.0, 0.9)
     sol = Collateral("SOL", 10, 100, 0.8)
     original = position([usdc, sol], 490, [Borrow("USDT", 490, 1.0)])  # triggerable
-    simulated = apply_overrides(original, {}, {"USDC": AmountChange(600.0, is_delta=False)})
+    simulated = apply_overrides(
+        original, Changes(collateral_amounts={"USDC": AmountChange(600.0, is_delta=False)})
+    )
     render._render_crash_comparison(original, simulated)  # sim stable cap 540 >= 490 -> SAFE
     text = out.getvalue()
     assert "Real:" in text
@@ -121,7 +125,9 @@ def test_render_simulation_renders_crash_comparison(out) -> None:
     usdc = Collateral("USDC", 100, 1.0, 0.9)
     sol = Collateral("SOL", 10, 100, 0.8)  # two collaterals -> crash section shown
     original = position([usdc, sol], 490, [Borrow("USDC", 490, 1.0)])
-    simulated = apply_overrides(original, {}, {"SOL": AmountChange(10.0, is_delta=True)})
+    simulated = apply_overrides(
+        original, Changes(collateral_amounts={"SOL": AmountChange(10.0, is_delta=True)})
+    )
     render.render_simulation(original, simulated)
     text = out.getvalue()
     assert "Global crash" in text
@@ -131,7 +137,7 @@ def test_render_simulation_renders_crash_comparison(out) -> None:
 def test_render_simulation_shows_changes_and_verdict(out) -> None:
     sol = Collateral("SOL", 100, 100, 0.8)
     original = position([sol], 4000, [Borrow("USDC", 4000, 1.0)])
-    simulated = apply_overrides(original, {"SOL": 40.0})
+    simulated = apply_overrides(original, Changes(prices={"SOL": 40.0}))
     render.render_simulation(original, simulated)
     text = out.getvalue()
     assert "Simulation" in text
@@ -145,7 +151,9 @@ def test_render_simulation_shows_changes_and_verdict(out) -> None:
 def test_render_simulation_shows_amount_changes(out) -> None:
     sol = Collateral("SOL", 100, 100, 0.8)
     original = position([sol], 4000, [Borrow("USDC", 4000, 1.0)])
-    simulated = apply_overrides(original, {}, {"SOL": AmountChange(50.0, is_delta=True)})
+    simulated = apply_overrides(
+        original, Changes(collateral_amounts={"SOL": AmountChange(50.0, is_delta=True)})
+    )
     render.render_simulation(original, simulated)
     text = out.getvalue()
     assert "Simulated amount changes" in text
@@ -166,9 +174,42 @@ def test_render_simulation_no_matching_changes(out) -> None:
 def test_render_simulation_no_debt_skips_health_line(out) -> None:
     sol = Collateral("SOL", 100, 100, 0.8)
     original = position([sol], 0)  # no debt -> no health-factor line
-    simulated = apply_overrides(original, {"SOL": 50.0})
+    simulated = apply_overrides(original, Changes(prices={"SOL": 50.0}))
     render.render_simulation(original, simulated)
     text = out.getvalue()
     assert "Simulated price changes" in text
     assert "Health factor:" not in text
     assert "cannot be liquidated" in text
+
+
+def test_render_simulation_with_added_assets(out) -> None:
+    sol = Collateral("SOL", 100, 100, 0.8)
+    original = position([sol], 4000, [Borrow("USDC", 4000, 1.0)])
+    new_c = Collateral("BTC", 1.0, 50_000, 0.9)
+    new_b = Borrow("ETH", 1.0, 2000, 1.5)
+    simulated = apply_overrides(original, Changes(add_collateral=(new_c,), add_borrows=(new_b,)))
+    render.render_simulation(original, simulated)
+    text = out.getvalue()
+    assert "Simulated amount changes" in text
+    assert "BTC" in text
+    assert "ETH" in text
+    assert "new" in text
+
+
+def test_render_simulation_shows_borrow_changes(out) -> None:
+    sol = Collateral("SOL", 100, 100, 0.8)
+    original = position([sol], 4000, [Borrow("USDC", 4000, 1.0)])
+    simulated = apply_overrides(
+        original,
+        Changes(
+            prices={"USDC": 1.05},
+            borrow_amounts={"USDC": AmountChange(-1000.0, is_delta=True)},
+        ),
+    )
+    render.render_simulation(original, simulated)
+    text = out.getvalue()
+    assert "Simulated price changes" in text
+    assert "Simulated amount changes" in text
+    assert "USDC" in text
+    assert "3,000.0000" in text
+    assert "1.05" in text

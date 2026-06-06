@@ -34,6 +34,7 @@ def test_load_positions_builds_from_loan_detail(fake_kamino, loan_detail):
     (position,) = list(service.load_positions(client, "W"))
     assert position.market_name == "Main Market"
     assert position.address == "OB"
+    assert position.market_id == "MKT"
     sol = position.collateral[0]
     assert (sol.symbol, sol.amount, sol.price, sol.liquidation_threshold) == (
         "SOL",
@@ -85,3 +86,51 @@ def test_market_name_cached(fake_kamino, loan_detail):
     positions = list(service.load_positions(client, "W"))
     assert len(positions) == 2
     assert calls["n"] == 1  # cached
+
+
+def test_resolve_reserve_kamino(fake_kamino) -> None:
+    client = fake_kamino(portfolio=[], loans={})
+
+    client.reserves = lambda m: [
+        {"liquidityToken": "SOL", "reserve": "SOL_RSV"},
+        {"liquidityToken": "USDC", "reserve": "USDC_RSV"},
+        {"liquidityToken": "USDT", "reserve": "USDT_RSV"},
+        {"liquidityToken": "PYTH", "reserve": "PYTH_RSV"},
+    ]
+    client.reserve_config = lambda m, r: (
+        {
+            "history": [
+                {
+                    "metrics": {
+                        "assetPriceUSD": "100.0",
+                        "borrowFactor": "120.0",
+                        "liquidationThreshold": "0.8",
+                    }
+                }
+            ]
+        }
+        if r == "SOL_RSV"
+        else (
+            {"history": [{}]} if r == "USDT_RSV" else ({"history": []} if r == "PYTH_RSV" else None)
+        )
+    )
+
+    # Found case (case-insensitive search):
+    res = service.resolve_reserve(client, "MKT", "sol")
+    assert res is not None
+    assert res.symbol == "SOL"
+    assert res.price == 100.0
+    assert res.borrow_factor == 1.2
+    assert res.liquidation_threshold == 0.8
+
+    # Not found case (token not in market reserves):
+    assert service.resolve_reserve(client, "MKT", "BONK") is None
+
+    # History not found/invalid:
+    assert service.resolve_reserve(client, "MKT", "USDC") is None
+
+    # History exists but metrics missing:
+    assert service.resolve_reserve(client, "MKT", "USDT") is None
+
+    # History key present but empty list:
+    assert service.resolve_reserve(client, "MKT", "PYTH") is None

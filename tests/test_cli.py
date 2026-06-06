@@ -9,9 +9,10 @@ WALLET = "11111111111111111111111111111111"  # valid base58 (system program)
 EVM = "0x" + "ab" * 20
 
 
-def patch_resolve(monkeypatch, protocol, loader):
+def patch_resolve(monkeypatch, protocol, loader, reserves=None):
     """Replace the protocol seam so the CLI runs without any I/O."""
-    monkeypatch.setattr(cli.sources, "resolve", lambda wallet, p, c: (protocol, loader))
+    res = reserves or (lambda m, s: None)
+    monkeypatch.setattr(cli.sources, "resolve", lambda wallet, p, c: (protocol, loader, res))
 
 
 def test_version() -> None:
@@ -155,3 +156,45 @@ def test_watch_survives_errors(monkeypatch) -> None:
     monkeypatch.setattr(cli.time, "sleep", sleep)
     cli._watch("W", "Kamino Lend", lambda: [], crash=True, interval=1)
     assert calls["n"] == 2
+
+
+def test_simulate_add_collateral_success(monkeypatch, sample_position) -> None:
+    from lend_liq.models import ReserveInfo
+
+    def fake_reserves(market_id, symbol):
+        if symbol.upper() == "PYUSD":
+            return ReserveInfo("PYUSD", 1.0, 0.9, 1.0)
+        return None
+
+    patch_resolve(monkeypatch, "kamino", lambda: [sample_position], reserves=fake_reserves)
+    result = runner.invoke(cli.app, ["simulate", WALLET, "-a", "PYUSD=300"])
+    assert result.exit_code == 0
+    assert "PYUSD" in result.output
+    assert "new" in result.output
+    assert "No position holds: PYUSD" not in result.output
+
+
+def test_simulate_add_borrow_success(monkeypatch, sample_position) -> None:
+    from lend_liq.models import ReserveInfo
+
+    def fake_reserves(market_id, symbol):
+        if symbol.upper() == "SOL":
+            return ReserveInfo("SOL", 100.0, 0.8, 1.2)
+        return None
+
+    patch_resolve(monkeypatch, "kamino", lambda: [sample_position], reserves=fake_reserves)
+    result = runner.invoke(cli.app, ["simulate", WALLET, "-b", "SOL=3"])
+    assert result.exit_code == 0
+    assert "SOL" in result.output
+    assert "new" in result.output
+    assert "No position holds: SOL" not in result.output
+
+
+def test_simulate_borrow_rejects_bad_format() -> None:
+    result = runner.invoke(cli.app, ["simulate", WALLET, "-b", "SOL"])
+    assert result.exit_code != 0
+
+
+def test_simulate_borrow_rejects_non_numeric() -> None:
+    result = runner.invoke(cli.app, ["simulate", WALLET, "-b", "SOL=bad"])
+    assert result.exit_code != 0

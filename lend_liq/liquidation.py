@@ -4,7 +4,7 @@ domain models, which keeps it trivial to unit-test."""
 from __future__ import annotations
 
 import enum
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 
 from .models import Borrow, Collateral, Position
 
@@ -88,6 +88,17 @@ def crash_scenario(position: Position) -> CrashScenario:
 
 
 @dataclass(frozen=True)
+class Changes:
+    """A collection of overrides and additions to apply to a Position."""
+
+    prices: dict[str, float] = field(default_factory=dict)
+    collateral_amounts: dict[str, AmountChange] = field(default_factory=dict)
+    borrow_amounts: dict[str, AmountChange] = field(default_factory=dict)
+    add_collateral: tuple[Collateral, ...] = field(default_factory=tuple)
+    add_borrows: tuple[Borrow, ...] = field(default_factory=tuple)
+
+
+@dataclass(frozen=True)
 class AmountChange:
     """A simulated change to an asset's amount: an absolute target, or — when
     `is_delta` — a signed adjustment added to the current amount (floored at 0)."""
@@ -100,31 +111,52 @@ class AmountChange:
         return max(0.0, amount + self.value) if self.is_delta else self.value
 
 
-def _amount(asset: Collateral | Borrow, amounts: dict[str, AmountChange]) -> float:
-    change = amounts.get(asset.symbol.upper())
-    return change.applied_to(asset.amount) if change else asset.amount
+def apply_overrides(position: Position, changes: Changes) -> Position:
+    """Return a copy of `position` with overrides and additions applied."""
 
+    def _override_collateral(c: Collateral) -> Collateral:
+        sym = c.symbol.upper()
+        price = changes.prices.get(sym, c.price)
+        amount = c.amount
+        if sym in changes.collateral_amounts:
+            amount = changes.collateral_amounts[sym].applied_to(amount)
+        return replace(c, price=price, amount=amount)
 
-def apply_overrides(
-    position: Position,
-    prices: dict[str, float],
-    amounts: dict[str, AmountChange] | None = None,
-) -> Position:
-    """Return a copy of `position` with collateral and borrow prices and amounts
-    replaced by `prices` and `amounts` (keyed by upper-case symbol). The
-    borrow-factor-adjusted debt is rescaled by its current aggregate factor, so
-    overriding a borrow's price or amount moves the debt consistently — exact for a
-    single-borrow position."""
-    amounts = amounts or {}
-    collateral = tuple(
-        replace(c, price=prices.get(c.symbol.upper(), c.price), amount=_amount(c, amounts))
-        for c in position.collateral
-    )
-    borrows = tuple(
-        replace(b, price=prices.get(b.symbol.upper(), b.price), amount=_amount(b, amounts))
-        for b in position.borrows
-    )
+    def _override_borrow(b: Borrow) -> Borrow:
+        sym = b.symbol.upper()
+        price = changes.prices.get(sym, b.price)
+        amount = b.amount
+        if sym in changes.borrow_amounts:
+            amount = changes.borrow_amounts[sym].applied_to(amount)
+        return replace(b, price=price, amount=amount)
+
+    def _priced_collateral(c: Collateral) -> Collateral:
+        sym = c.symbol.upper()
+        price = changes.prices.get(sym, c.price)
+        return replace(c, price=price)
+
+    def _priced_borrow(b: Borrow) -> Borrow:
+        sym = b.symbol.upper()
+        price = changes.prices.get(sym, b.price)
+        return replace(b, price=price)
+
+    # Apply overrides to existing collateral
+    collateral = tuple(_override_collateral(c) for c in position.collateral)
+    # Append newly added collateral (with prices overridden if present)
+    collateral += tuple(_priced_collateral(c) for c in changes.add_collateral)
+
+    # Apply overrides to existing borrows
+    existing_borrows = tuple(_override_borrow(b) for b in position.borrows)
+    # Append newly added borrows (with prices overridden if present)
+    added_borrows = tuple(_priced_borrow(b) for b in changes.add_borrows)
+    borrows = existing_borrows + added_borrows
+
+    # Debt calculation
     old_borrowed = sum(b.value for b in position.borrows)
     factor = position.debt_value / old_borrowed if old_borrowed else 1.0
-    debt_value = factor * sum(b.value for b in borrows)
+
+    existing_debt = factor * sum(b.value for b in existing_borrows)
+    added_debt = sum(b.value * b.borrow_factor for b in added_borrows)
+    debt_value = existing_debt + added_debt
+
     return replace(position, collateral=collateral, borrows=borrows, debt_value=debt_value)

@@ -40,6 +40,7 @@ class Borrow:
     symbol: str
     amount: float
     price: float
+    borrow_factor: float = 1.0
 
     @property
     def value(self) -> float:
@@ -61,6 +62,7 @@ class Position:
     collateral: tuple[Collateral, ...]
     borrows: tuple[Borrow, ...]
     debt_value: float  # Kamino's fresh, borrow-factor-adjusted debt (USD)
+    market_id: str = ""
 
     @property
     def has_debt(self) -> bool:
@@ -103,3 +105,13 @@ class Position:
         if not self.liquidation_limit:
             return 0.0
         return max(0.0, 1 - self.debt_value / self.liquidation_limit)
+
+
+@dataclass(frozen=True)
+class ReserveInfo:
+    """Info fetched from a protocol's reserve catalog for simulating new assets."""
+
+    symbol: str
+    price: float
+    liquidation_threshold: float
+    borrow_factor: float

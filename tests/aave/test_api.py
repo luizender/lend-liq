@@ -22,6 +22,7 @@ def test_markets_posts_chains_and_user():
     body = session.post.call_args.kwargs["json"]
     assert body["variables"]["req"] == {"chainIds": [1, 137], "user": "0xU"}
     assert "markets(request" in body["query"]
+    assert "usdExchangeRate" in body["query"]
 
 
 def test_user_positions_combines_supplies_and_borrows():

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
+
 import requests
 
 from .. import config
@@ -40,6 +42,23 @@ class KaminoClient:
         """Return one loan's fully-priced detail (underlying amounts, live prices,
         per-asset liquidation thresholds, and borrow factors)."""
         return self._get(f"klend/loans/{obligation}")
+
+    def reserves(self, market: str) -> list[dict]:
+        """Return the list of reserves in the market."""
+        return self._get(f"kamino-market/{market}/reserves/metrics")
+
+    def reserve_config(self, market: str, reserve: str) -> dict:
+        """Return metrics history for a specific reserve to extract configuration."""
+        now = datetime.now(timezone.utc)
+        start = (now - timedelta(days=7)).strftime("%Y-%m-%d")
+        end = now.strftime("%Y-%m-%d")
+        return self._get(
+            f"kamino-market/{market}/reserves/{reserve}/metrics/history",
+            env="mainnet-beta",
+            start=start,
+            end=end,
+            frequency="day",
+        )
 
 
 def _new_session() -> requests.Session:
