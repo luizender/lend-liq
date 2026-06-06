@@ -81,12 +81,40 @@ def _render_body(position: Position, show_crash: bool, original: Position | None
     console.print()
 
 
-def _render_overrides(original: Position, simulated: Position) -> None:
-    pairs = list(zip(original.collateral, simulated.collateral, strict=True)) + list(
-        zip(original.borrows, simulated.borrows, strict=True)
-    )
-    price_rows = [(before, after) for before, after in pairs if before.price != after.price]
-    amount_rows = [(before, after) for before, after in pairs if before.amount != after.amount]
+def _render_overrides(original: Position, simulated: Position) -> None:  # pylint: disable=too-many-branches
+    orig_coll = {c.symbol.upper(): c for c in original.collateral}
+    orig_borr = {b.symbol.upper(): b for b in original.borrows}
+    sim_coll = {c.symbol.upper(): c for c in simulated.collateral}
+    sim_borr = {b.symbol.upper(): b for b in simulated.borrows}
+
+    price_rows: list[tuple[Collateral | Borrow, Collateral | Borrow]] = []
+    for sym, sim_c in sim_coll.items():
+        if sym in orig_coll:
+            orig_c = orig_coll[sym]
+            if orig_c.price != sim_c.price:
+                price_rows.append((orig_c, sim_c))
+    for sym, sim_b in sim_borr.items():
+        if sym in orig_borr:
+            orig_b = orig_borr[sym]
+            if orig_b.price != sim_b.price:
+                price_rows.append((orig_b, sim_b))
+
+    amount_rows: list[tuple[Collateral | Borrow | None, Collateral | Borrow]] = []
+    for sym, sim_c in sim_coll.items():
+        if sym in orig_coll:
+            orig_c = orig_coll[sym]
+            if orig_c.amount != sim_c.amount:
+                amount_rows.append((orig_c, sim_c))
+        else:
+            amount_rows.append((None, sim_c))
+    for sym, sim_b in sim_borr.items():
+        if sym in orig_borr:
+            orig_b = orig_borr[sym]
+            if orig_b.amount != sim_b.amount:
+                amount_rows.append((orig_b, sim_b))
+        else:
+            amount_rows.append((None, sim_b))
+
     if not price_rows and not amount_rows:
         console.print("[dim]No simulated changes apply to this position.[/dim]\n")
         return
@@ -107,7 +135,7 @@ def _render_overrides(original: Position, simulated: Position) -> None:
 
 def _render_change_table(
     title: str,
-    rows: list[tuple[Collateral | Borrow, Collateral | Borrow]],
+    rows: list[tuple[Collateral | Borrow | None, Collateral | Borrow]],
     value: Callable[[Collateral | Borrow], float],
     fmt: Callable[[float], str],
 ) -> None:
@@ -116,9 +144,13 @@ def _render_change_table(
     for name in ("Original", "Simulated", "Change"):
         table.add_column(name, justify="right")
     for before, after in rows:
-        before_v, after_v = value(before), value(after)
-        change = (after_v - before_v) / before_v if before_v else 0.0
-        table.add_row(after.symbol, fmt(before_v), fmt(after_v), f"{change:+.1%}")
+        after_v = value(after)
+        if before is None:
+            table.add_row(after.symbol, "—", fmt(after_v), "new")
+        else:
+            before_v = value(before)
+            change = (after_v - before_v) / before_v if before_v else 0.0
+            table.add_row(after.symbol, fmt(before_v), fmt(after_v), f"{change:+.1%}")
     console.print(table)
 
 
@@ -185,13 +217,16 @@ def _render_single_asset_comparison(original: Position, simulated: Position) -> 
     table.add_column("Asset")
     for name in ("Price", "Real liq.", "Sim. liq.", "Sim. buffer"):
         table.add_column(name, justify="right")
-    for real, sim in zip(
-        single_asset_levels(original), single_asset_levels(simulated), strict=True
-    ):
+    real_levels = {
+        level.collateral.symbol.upper(): level for level in single_asset_levels(original)
+    }
+    for sim in single_asset_levels(simulated):
+        real = real_levels.get(sim.collateral.symbol.upper())
+        real_liq = _liq_price_cell(real) if real is not None else "—"
         table.add_row(
             sim.collateral.symbol,
             _usd(sim.collateral.price),
-            _liq_price_cell(real),
+            real_liq,
             _liq_price_cell(sim),
             _buffer_cell(sim),
         )
@@ -266,7 +301,7 @@ def _render_crash_comparison(original: Position, simulated: Position) -> None:
         console.print(f"Simulated: {_crash_summary(sim)}")
         return
 
-    real_prices = {c.symbol: p for c, p in real.prices}
+    real_prices = {c.symbol.upper(): p for c, p in real.prices}
     table = _table(
         f"Global crash — liquidated if volatile collateral drops {sim.drop:.1%} "
         f"(real: {real.drop:.1%})"
@@ -278,11 +313,14 @@ def _render_crash_comparison(original: Position, simulated: Position) -> None:
     for collateral, price in sim.prices:
         kind, suffix = ("stable", " (held)") if collateral.is_stable else ("volatile", "")
         change = (price - collateral.price) / collateral.price if collateral.price else 0.0
+        real_liq = "—"
+        if collateral.symbol.upper() in real_prices:
+            real_liq = _usd(real_prices[collateral.symbol.upper()])
         table.add_row(
             collateral.symbol,
             kind,
             _usd(collateral.price),
-            _usd(real_prices[collateral.symbol]),
+            real_liq,
             f"{_usd(price)}{suffix}",
             f"{change:.1%}",
         )

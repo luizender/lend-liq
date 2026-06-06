@@ -7,12 +7,13 @@ USDC = "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48"
 MKT = "0x87870Bca3F3fD6335C3F4ce8392D69350B4fA4E2"
 
 
-def _reserve(symbol, address, lt, emode_lt=None):
+def _reserve(symbol, address, lt, emode_lt=None, usd_exchange_rate=0.0):
     emode = {"liquidationThreshold": {"value": str(emode_lt)}} if emode_lt is not None else None
     return {
         "underlyingToken": {"symbol": symbol, "address": address},
         "supplyInfo": {"liquidationThreshold": {"value": str(lt)}},
         "userState": {"emode": emode},
+        "usdExchangeRate": str(usd_exchange_rate),
     }
 
 
@@ -60,6 +61,7 @@ def test_builds_position_with_threshold_and_plain_debt(fake_aave):
 
     (position,) = list(aave_service.load_positions(client, "0xU", [1]))
     assert position.market_name == "AaveV3Ethereum"
+    assert position.market_id == f"1:{MKT}"
     weth = position.collateral[0]
     assert (weth.symbol, weth.amount, weth.price, weth.liquidation_threshold) == (
         "WETH",
@@ -163,3 +165,26 @@ def test_same_pool_address_on_different_chains_stays_separate(fake_aave):
     assert positions["AaveV3Polygon"].collateral[0].amount == 2
     assert positions["AaveV3Polygon"].collateral[0].liquidation_threshold == 0.85
     assert positions["AaveV3Polygon"].debt_value == 100.0
+
+
+def test_resolve_reserve_aave(fake_aave) -> None:
+    client = fake_aave(
+        markets=[_market(reserves=[_reserve("WETH", WETH, 0.85, usd_exchange_rate=1600.0)])]
+    )
+
+    # Found case (case-insensitive search):
+    res = aave_service.resolve_reserve(client, "0xU", f"1:{MKT}", "weth")
+    assert res is not None
+    assert res.symbol == "WETH"
+    assert res.price == 1600.0
+    assert res.borrow_factor == 1.0
+    assert res.liquidation_threshold == 0.85
+
+    # Not found case:
+    assert aave_service.resolve_reserve(client, "0xU", f"1:{MKT}", "BONK") is None
+
+    # Bad market_id format:
+    assert aave_service.resolve_reserve(client, "0xU", "invalid", "weth") is None
+
+    # Market not found:
+    assert aave_service.resolve_reserve(client, "0xU", "1:0xNonExistent", "weth") is None

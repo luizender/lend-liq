@@ -44,3 +44,21 @@ def test_base_url_is_trimmed_and_default_session_built() -> None:
     # No session passed -> a default one with a User-Agent is created.
     default = KaminoClient()
     assert "User-Agent" in default.session.headers
+
+
+def test_reserves_url() -> None:
+    client, session = make_client([])
+    client.reserves("MKT")
+    assert session.get.call_args.args[0].endswith("/kamino-market/MKT/reserves/metrics")
+
+
+def test_reserve_config_url() -> None:
+    client, session = make_client([])
+    client.reserve_config("MKT", "RSV")
+    url = session.get.call_args.args[0]
+    assert url.endswith("/kamino-market/MKT/reserves/RSV/metrics/history")
+    params = session.get.call_args.kwargs["params"]
+    assert params["env"] == "mainnet-beta"
+    assert params["frequency"] == "day"
+    assert "start" in params
+    assert "end" in params

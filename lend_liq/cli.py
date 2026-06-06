@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import enum
 import time
+from collections.abc import Callable
 from datetime import datetime
 
 import typer
 
 from . import __version__, config, sources
-from .liquidation import AmountChange, apply_overrides
+from .liquidation import AmountChange, Changes, apply_overrides
+from .models import Borrow, Collateral, ReserveInfo
 from .render import console, render_position, render_simulation
 
 
@@ -81,7 +83,7 @@ def report(
     ),
 ) -> None:
     """Show the liquidation prices of WALLET's lending positions."""
-    label, loader = _resolve(wallet, protocol, chain)
+    label, loader, _ = _resolve(wallet, protocol, chain)
     if watch:
         _watch(wallet, label, loader, crash, interval)
     else:
@@ -89,7 +91,7 @@ def report(
 
 
 @app.command("simulate")
-def simulate_command(
+def simulate_command(  # pylint: disable=too-many-locals
     wallet: str = typer.Argument(
         ..., help="Wallet address: a Solana key (Kamino) or EVM 0x address (Aave). Read-only."
     ),
@@ -102,8 +104,19 @@ def simulate_command(
         None,
         "--amount",
         "-a",
-        help="Change an asset amount: -a SOL=+10 (add), -a SOL=-5 (remove), -a SOL=200 (set). "
-        "Repeatable.",
+        help=(
+            "Change a collateral asset amount: -a SOL=+10 (add), "
+            "-a SOL=-5 (remove), -a SOL=200 (set). Repeatable."
+        ),
+    ),
+    borrow: list[str] = typer.Option(
+        None,
+        "--borrow",
+        "-b",
+        help=(
+            "Change a borrow asset amount: -b SOL=+10 (add), -b SOL=-5 (remove), -b SOL=200 (set). "
+            "Repeatable."
+        ),
     ),
     crash: bool = typer.Option(
         True, "--crash/--no-crash", help="Include the global market-crash scenario."
@@ -111,38 +124,99 @@ def simulate_command(
 ) -> None:
     """Recompute WALLET's liquidation health under hypothetical prices and amounts."""
     prices = _parse_prices(price or [])
-    amounts = _parse_amounts(amount or [])
-    if not prices and not amounts:
+    amounts = _parse_amounts(amount or [], "--amount")
+    borrows = _parse_amounts(borrow or [], "--borrow")
+    if not prices and not amounts and not borrows:
         raise typer.BadParameter(
-            "provide at least one --price or --amount change", param_hint="--price/--amount"
+            "provide at least one --price, --amount, or --borrow change",
+            param_hint="--price/--amount/--borrow",
         )
-    label, loader = _resolve(wallet, protocol, chain)
+    label, loader, reserves = _resolve(wallet, protocol, chain)
 
-    held: set[str] = set()
+    requested = set(prices) | set(amounts) | set(borrows)
+    resolved_globally: set[str] = set()
+    processed_any = False
+
     for position in loader():
-        render_simulation(position, apply_overrides(position, prices, amounts), show_crash=crash)
-        held.update(c.symbol.upper() for c in position.collateral)
-        held.update(b.symbol.upper() for b in position.borrows)
+        processed_any = True
+        held_collateral = {c.symbol.upper() for c in position.collateral}
+        held_borrows = {b.symbol.upper() for b in position.borrows}
 
-    if not held:
+        collateral_amounts = {
+            sym: change for sym, change in amounts.items() if sym in held_collateral
+        }
+        borrow_amounts = {sym: change for sym, change in borrows.items() if sym in held_borrows}
+
+        add_collateral = []
+        added_collateral_symbols = set()
+        for sym, change in amounts.items():
+            if sym not in held_collateral:
+                res_info = reserves(position.market_id, sym)
+                if res_info:
+                    add_collateral.append(
+                        Collateral(
+                            symbol=res_info.symbol,
+                            amount=change.applied_to(0.0),
+                            price=res_info.price,
+                            liquidation_threshold=res_info.liquidation_threshold,
+                        )
+                    )
+                    added_collateral_symbols.add(sym)
+
+        add_borrows = []
+        added_borrow_symbols = set()
+        for sym, change in borrows.items():
+            if sym not in held_borrows:
+                res_info = reserves(position.market_id, sym)
+                if res_info:
+                    add_borrows.append(
+                        Borrow(
+                            symbol=res_info.symbol,
+                            amount=change.applied_to(0.0),
+                            price=res_info.price,
+                            borrow_factor=res_info.borrow_factor,
+                        )
+                    )
+                    added_borrow_symbols.add(sym)
+
+        changes = Changes(
+            prices=prices,
+            collateral_amounts=collateral_amounts,
+            borrow_amounts=borrow_amounts,
+            add_collateral=tuple(add_collateral),
+            add_borrows=tuple(add_borrows),
+        )
+
+        simulated = apply_overrides(position, changes)
+        render_simulation(position, simulated, show_crash=crash)
+
+        resolved_this_position = (
+            held_collateral | held_borrows | added_collateral_symbols | added_borrow_symbols
+        )
+        resolved_globally.update(resolved_this_position)
+
+    if not processed_any:
         console.print(f"[yellow]No {label} positions found for {wallet}.[/yellow]")
         return
-    unknown = sorted((set(prices) | set(amounts)) - held)
-    if unknown:
-        console.print(f"[yellow]No position holds: {', '.join(unknown)}.[/yellow]")
+
+    unresolved = requested - resolved_globally
+    if unresolved:
+        console.print(f"[yellow]No position holds: {', '.join(sorted(unresolved))}.[/yellow]")
 
 
 # --------------------------------------------------------------------------- #
 # Helpers
 # --------------------------------------------------------------------------- #
-def _resolve(wallet: str, protocol: Protocol, chain: Chain) -> tuple[str, sources.Loader]:
+def _resolve(
+    wallet: str, protocol: Protocol, chain: Chain
+) -> tuple[str, sources.Loader, Callable[[str, str], ReserveInfo | None]]:
     # "all" carries no specific chain; sources reads a missing chain as scan-every-chain.
     chain_arg = None if chain.value == "all" else chain.value
     try:
-        name, loader = sources.resolve(wallet, protocol.value, chain_arg)
+        name, loader, reserves = sources.resolve(wallet, protocol.value, chain_arg)
     except ValueError as exc:
         raise typer.BadParameter(str(exc)) from exc
-    return sources.LABELS[name], loader
+    return sources.LABELS[name], loader, reserves
 
 
 def _parse_prices(items: list[str]) -> dict[str, float]:
@@ -158,18 +232,18 @@ def _parse_prices(items: list[str]) -> dict[str, float]:
     return overrides
 
 
-def _parse_amounts(items: list[str]) -> dict[str, AmountChange]:
+def _parse_amounts(items: list[str], param: str = "--amount") -> dict[str, AmountChange]:
     # A leading +/- means adjust by that much; a bare number sets the amount outright.
     amounts: dict[str, AmountChange] = {}
     for item in items:
         symbol, sep, value = item.partition("=")
         if not sep or not symbol.strip():
-            raise typer.BadParameter(f"expected SYMBOL=AMOUNT, got {item!r}", param_hint="--amount")
+            raise typer.BadParameter(f"expected SYMBOL=AMOUNT, got {item!r}", param_hint=param)
         is_delta = value.strip().startswith(("+", "-"))
         try:
             amounts[symbol.strip().upper()] = AmountChange(float(value), is_delta)
         except ValueError as exc:
-            raise typer.BadParameter(f"{value!r} is not a number", param_hint="--amount") from exc
+            raise typer.BadParameter(f"{value!r} is not a number", param_hint=param) from exc
     return amounts
 
 
